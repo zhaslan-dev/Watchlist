@@ -66,14 +66,15 @@ class QueueRepository(IQueueRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create_queue(self, chat_id: int, title: str = "Общая очередь") -> Queue:
-        db_queue = QueueDB(chat_id=chat_id, title=title)
+    async def create_queue(self, chat_id: int, title: str = "Общая очередь", chat_type: str = "private") -> Queue:
+        db_queue = QueueDB(chat_id=chat_id, title=title, chat_type=chat_type)
         self.session.add(db_queue)
         await self.session.flush()
         return Queue(
             id=db_queue.id,
             chat_id=db_queue.chat_id,
             title=db_queue.title,
+            chat_type=db_queue.chat_type,
             created_at=db_queue.created_at,
         )
 
@@ -86,6 +87,7 @@ class QueueRepository(IQueueRepository):
                 id=db_q.id,
                 chat_id=db_q.chat_id,
                 title=db_q.title,
+                chat_type=db_q.chat_type,
                 created_at=db_q.created_at,
             )
         return None
@@ -99,6 +101,7 @@ class QueueRepository(IQueueRepository):
                 id=db_q.id,
                 chat_id=db_q.chat_id,
                 title=db_q.title,
+                chat_type=db_q.chat_type,
                 created_at=db_q.created_at,
             )
         return None

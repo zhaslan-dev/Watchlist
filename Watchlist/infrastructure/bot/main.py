@@ -5,7 +5,11 @@ from loguru import logger
 from Watchlist.config import settings
 from Watchlist.infrastructure.bot.handlers import commands, callbacks
 from Watchlist.infrastructure.bot.middlewares import (
-    DBSessionMiddleware, RequestIdMiddleware, ServiceFactoryMiddleware, ErrorHandlingMiddleware
+    DBSessionMiddleware,
+    RequestIdMiddleware,
+    ServiceFactoryMiddleware,
+    ErrorHandlingMiddleware,
+    AccessMiddleware,
 )
 from Watchlist.infrastructure.db.session import async_session_maker
 from Watchlist.infrastructure.metrics import start_metrics_server
@@ -47,6 +51,8 @@ async def start_bot() -> None:
     dp.callback_query.middleware(ServiceFactoryMiddleware(bot))
     dp.message.middleware(ErrorHandlingMiddleware())
     dp.callback_query.middleware(ErrorHandlingMiddleware())
+    dp.message.middleware(AccessMiddleware())
+    dp.callback_query.middleware(AccessMiddleware())
 
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)

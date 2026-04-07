@@ -32,6 +32,7 @@ class Queue(BaseModel):
     id: Optional[int] = None
     chat_id: int
     title: str = "Общая очередь"
+    chat_type: str = "private"   # private, group, supergroup
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class QueueItem(BaseModel):
@@ -42,7 +43,7 @@ class QueueItem(BaseModel):
     status: QueueItemStatus = QueueItemStatus.PENDING
     votes_for: int = 0
     votes_against: int = 0
-    message_id: Optional[int] = None   # ID сообщения в Telegram с кнопками
+    message_id: Optional[int] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Vote(BaseModel):
@@ -57,5 +58,6 @@ class WatchedHistory(BaseModel):
     queue_item_id: int
     media_id: int
     chat_id: int
+    user_rating: Optional[int] = None   # 1–10
     accepted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     accepted_by: Optional[int] = None

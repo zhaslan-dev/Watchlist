@@ -9,6 +9,7 @@ from Watchlist.application.services.queue_service import QueueService
 from Watchlist.infrastructure.db.repositories import (
     MediaRepository, QueueRepository, QueueItemRepository, VoteRepository, WatchedHistoryRepository
 )
+from Watchlist.config import settings
 
 class DBSessionMiddleware(BaseMiddleware):
     def __init__(self, session_maker: async_sessionmaker):
@@ -67,3 +68,28 @@ class ErrorHandlingMiddleware(BaseMiddleware):
         except Exception as e:
             logger.exception(f"Unhandled exception: {e}")
             await event.answer("❌ Произошла непредвиденная ошибка. Администраторы уже уведомлены.")
+
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user_id = None
+        chat_id = None
+
+        if hasattr(event, "from_user") and event.from_user:
+            user_id = event.from_user.id
+        elif hasattr(event, "message") and event.message and event.message.from_user:
+            user_id = event.message.from_user.id
+
+        if hasattr(event, "chat") and event.chat:
+            chat_id = event.chat.id
+        elif hasattr(event, "message") and event.message and event.message.chat:
+            chat_id = event.message.chat.id
+
+        if settings.ALLOWED_USER_IDS and user_id not in settings.ALLOWED_USER_IDS:
+            await event.answer("⛔ Доступ запрещён. Этот бот для личного использования.")
+            return
+
+        if settings.ALLOWED_CHAT_IDS and chat_id not in settings.ALLOWED_CHAT_IDS:
+            await event.answer("⛔ Бот работает только в разрешённых чатах.")
+            return
+
+        return await handler(event, data)

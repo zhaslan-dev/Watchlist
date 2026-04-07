@@ -21,6 +21,7 @@ class QueueDB(Base):
     id = Column(Integer, primary_key=True)
     chat_id = Column(BigInteger, unique=True, index=True, nullable=False)
     title = Column(String, nullable=False)
+    chat_type = Column(String(20), nullable=False, default="private")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class QueueItemDB(Base):
@@ -49,5 +50,6 @@ class WatchedHistoryDB(Base):
     queue_item_id = Column(Integer, ForeignKey("queue_items.id", ondelete="SET NULL"), nullable=True)
     media_id = Column(Integer, ForeignKey("media_items.id", ondelete="CASCADE"), nullable=False)
     chat_id = Column(BigInteger, nullable=False)
+    user_rating = Column(Integer, nullable=True)
     accepted_by = Column(BigInteger, nullable=True)
     accepted_at = Column(DateTime(timezone=True), server_default=func.now())

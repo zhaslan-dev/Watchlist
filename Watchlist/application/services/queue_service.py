@@ -7,7 +7,7 @@ from Watchlist.domain.interfaces import (
 )
 from Watchlist.infrastructure.api.kinopoisk import KinopoiskClient, KinopoiskError
 from Watchlist.config import settings
-from Watchlist.infrastructure.bot.keyboards import media_links_keyboard
+from Watchlist.infrastructure.bot.keyboards import media_links_keyboard, rating_keyboard
 
 class QueueService:
     def __init__(
@@ -31,8 +31,11 @@ class QueueService:
     async def get_or_create_queue(self, chat_id: int) -> Queue:
         queue = await self.queue_repo.get_queue_by_chat(chat_id)
         if not queue:
-            queue = await self.queue_repo.create_queue(chat_id)
-            logger.info(f"Created new queue for chat {chat_id}")
+            # Определяем тип чата через Telegram API
+            chat = await self.bot.get_chat(chat_id)
+            chat_type = chat.type  # 'private', 'group', 'supergroup'
+            queue = await self.queue_repo.create_queue(chat_id, chat_type=chat_type)
+            logger.info(f"Created new queue for chat {chat_id} of type {chat_type}")
         return queue
 
     async def add_media_from_kinopoisk(self, chat_id: int, kinopoisk_id: str, added_by: int) -> QueueItem:
@@ -78,36 +81,58 @@ class QueueService:
             queue_item.votes_against += 1
 
         queue_item = await self.queue_item_repo.update_item(queue_item)
+        # Проверяем принятие асинхронно, но можно и синхронно
         asyncio.create_task(self._check_and_accept(queue_item))
         return queue_item
 
     async def _check_and_accept(self, item: QueueItem):
-        if (item.votes_for - item.votes_against >= settings.VOTE_THRESHOLD and
-            item.votes_for + item.votes_against >= settings.MIN_VOTERS and
+        queue = await self.queue_repo.get_queue_by_id(item.queue_id)
+        if not queue:
+            logger.error(f"Queue not found for item {item.id}")
+            return
+
+        # Определяем порог в зависимости от типа чата
+        if queue.chat_type == "private":
+            threshold = 1
+            min_voters = 1
+        else:
+            threshold = settings.VOTE_THRESHOLD
+            min_voters = settings.MIN_VOTERS
+
+        logger.debug(f"Item {item.id}: votes_for={item.votes_for}, votes_against={item.votes_against}, threshold={threshold}, min_voters={min_voters}")
+
+        if (item.votes_for - item.votes_against >= threshold and
+            item.votes_for + item.votes_against >= min_voters and
             item.status == QueueItemStatus.PENDING):
             item.status = QueueItemStatus.ACCEPTED
             await self.queue_item_repo.update_item(item)
-            logger.info(f"Queue item {item.id} accepted")
+            logger.info(f"Queue item {item.id} accepted in {queue.chat_type} chat")
 
-            queue = await self.queue_repo.get_queue_by_id(item.queue_id)
-            if queue:
-                history = WatchedHistory(
-                    queue_item_id=item.id,
-                    media_id=item.media_id,
+            # Сохраняем в историю (без оценки пока)
+            history = WatchedHistory(
+                queue_item_id=item.id,
+                media_id=item.media_id,
+                chat_id=queue.chat_id,
+                accepted_by=None,
+            )
+            await self.history_repo.add(history)
+
+            # Отправляем сообщение с ссылками на кинотеатры
+            media = await self.media_repo.get_by_id(item.media_id)
+            if media:
+                text = f"✅ *{media.title}* одобрен для просмотра!\n\nГде смотреть:"
+                markup = media_links_keyboard(media.title, media.external_id)
+                await self.bot.send_message(chat_id=queue.chat_id, text=text, reply_markup=markup, parse_mode="Markdown")
+
+                # Через некоторое время запросим оценку (можно сразу или отдельным сообщением)
+                await asyncio.sleep(2)
+                rating_markup = rating_keyboard(item.id)
+                await self.bot.send_message(
                     chat_id=queue.chat_id,
+                    text=f"🎬 После просмотра оцените фильм *{media.title}* от 1 до 10:",
+                    reply_markup=rating_markup,
+                    parse_mode="Markdown"
                 )
-                await self.history_repo.add(history)
-
-                media = await self.media_repo.get_by_id(item.media_id)
-                if media:
-                    text = f"✅ *{media.title}* одобрен для просмотра!"
-                    markup = media_links_keyboard(media.title)
-                    await self.bot.send_message(
-                        chat_id=queue.chat_id,
-                        text=text,
-                        reply_markup=markup,
-                        parse_mode="Markdown"
-                    )
 
     async def get_queue_items(self, chat_id: int, status: Optional[QueueItemStatus] = QueueItemStatus.PENDING) -> List[QueueItem]:
         queue = await self.get_or_create_queue(chat_id)
