@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install poetry
-          poetry install
+          poetry install --no-root
       - name: Run tests
         env:
           DATABASE_URL: postgresql+asyncpg://test:test@localhost/testdb
