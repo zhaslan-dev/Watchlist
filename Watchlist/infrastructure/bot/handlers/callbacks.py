@@ -2,7 +2,6 @@ import re
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 from Watchlist.application.services.queue_service import QueueService
 from Watchlist.infrastructure.bot.keyboards import vote_keyboard
@@ -27,7 +26,6 @@ async def process_vote(callback: CallbackQuery, queue_service: QueueService):
         updated_item = await queue_service.vote(item_id, callback.from_user.id, vote_type)
         await callback.answer(f"Ваш голос учтён! 👍 {updated_item.votes_for} | 👎 {updated_item.votes_against}")
 
-        # Если элемент уже принят, удаляем кнопки
         if updated_item.status != QueueItemStatus.PENDING and updated_item.message_id:
             try:
                 queue = await queue_service.queue_repo.get_queue_by_id(updated_item.queue_id)
@@ -49,21 +47,21 @@ async def process_vote(callback: CallbackQuery, queue_service: QueueService):
         await callback.answer("Произошла ошибка при голосовании", show_alert=True)
 
 @router.callback_query(F.data.startswith("rate_"))
-async def process_rating(callback: CallbackQuery, session: AsyncSession, queue_service: QueueService):
-    _, item_id_str, rating_str = callback.data.split("_")
+async def process_rating(callback: CallbackQuery, queue_service: QueueService):
+    """Обработка оценки фильма (1–10)."""
+    parts = callback.data.split("_")
+    if len(parts) != 3:
+        await callback.answer("Неверный формат")
+        return
+    _, item_id_str, rating_str = parts
     item_id = int(item_id_str)
     rating = int(rating_str)
 
-    # Находим элемент очереди
     queue_item = await queue_service.queue_item_repo.get_item(item_id)
     if not queue_item or queue_item.status != QueueItemStatus.ACCEPTED:
         await callback.answer("Этот фильм уже был оценён или не найден.")
         return
 
-    # Обновляем историю: добавляем оценку
-    # Сначала ищем существующую запись истории по queue_item_id
-    # В простом варианте создадим новую (если не хотим искать)
-    # Лучше получить последнюю запись для этого элемента
     history = WatchedHistory(
         queue_item_id=item_id,
         media_id=queue_item.media_id,
@@ -72,6 +70,15 @@ async def process_rating(callback: CallbackQuery, session: AsyncSession, queue_s
         accepted_by=callback.from_user.id,
     )
     await queue_service.history_repo.add(history)
-    await callback.message.edit_text(f"🎬 Спасибо за оценку {rating}/10!")
-    await callback.message.edit_reply_markup()
+
+    # Изменяем текст сообщения, убираем клавиатуру
+    try:
+        await callback.message.edit_text(f"🎬 Спасибо за оценку {rating}/10!")
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Игнорируем, если сообщение уже без клавиатуры
+            pass
+        else:
+            raise
     await callback.answer()

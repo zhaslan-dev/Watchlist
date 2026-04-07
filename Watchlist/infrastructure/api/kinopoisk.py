@@ -90,7 +90,16 @@ class KinopoiskClient:
             raise KinopoiskError("Search failed") from e
 
     async def get_movie_by_id(self, kinopoisk_id: int) -> Optional[KinopoiskMovie]:
-        ...
+        cache_key = f"movie:{kinopoisk_id}"  # <-- ОБЯЗАТЕЛЬНО ОПРЕДЕЛИТЬ ЗДЕСЬ
+        if redis_client:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                logger.debug(f"Cache hit for {cache_key}")
+                if isinstance(cached, str):
+                    return KinopoiskMovie.model_validate_json(cached)
+                else:
+                    return KinopoiskMovie.model_validate(cached)
+
         response = await self._request("GET", f"/v2.2/films/{kinopoisk_id}")
         data = response.json()
 

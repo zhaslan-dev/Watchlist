@@ -19,6 +19,7 @@ from Watchlist.config import settings
 from Watchlist.domain.entities import VoteType
 from Watchlist.infrastructure.metrics import REQUEST_COUNT, SEARCH_DURATION
 from Watchlist.infrastructure.db.repositories import WatchedHistoryRepository
+from Watchlist.tasks import send_reminder_async
 
 router = Router()
 
@@ -109,10 +110,10 @@ async def select_movie(callback: CallbackQuery, state: FSMContext, queue_service
             kinopoisk_id=str(kinopoisk_id),
             added_by=callback.from_user.id,
         )
-        # Отправляем карточку с кнопками голосования
         media = await queue_service.get_media_for_item(queue_item)
         if media and media.poster_url:
-            caption = f"🎬 *{media.title}*"
+            # Используем HTML вместо Markdown – безопасно и не требует экранирования
+            caption = f"🎬 <b>{media.title}</b>"
             if media.year:
                 caption += f" ({media.year})"
             if media.rating:
@@ -125,13 +126,12 @@ async def select_movie(callback: CallbackQuery, state: FSMContext, queue_service
             msg = await callback.message.answer_photo(
                 photo=media.poster_url,
                 caption=caption,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=vote_keyboard(queue_item.id)
             )
         else:
             text = f"✅ Добавлено в очередь: {selected_movie.nameRu or selected_movie.nameEn}"
             msg = await callback.message.answer(text, reply_markup=vote_keyboard(queue_item.id))
-        # Сохраняем message_id для возможности удаления кнопок
         queue_item.message_id = msg.message_id
         await queue_service.queue_item_repo.update_item(queue_item)
         logger.info(f"User {callback.from_user.id} added movie {kinopoisk_id}")
@@ -150,7 +150,7 @@ async def cmd_queue(message: Message, queue_service: QueueService):
         await message.answer("Очередь пуста. Добавьте фильмы через /search")
         return
 
-    text = "📋 *Текущая очередь:*\n"
+    text = "📋 <b>Текущая очередь:</b>\n"
     for idx, item in enumerate(items, 1):
         media = await queue_service.get_media_for_item(item)
         if media:
@@ -158,10 +158,10 @@ async def cmd_queue(message: Message, queue_service: QueueService):
             year = f" ({media.year})" if media.year else ""
             rating = f"⭐ {media.rating}" if media.rating else ""
             director = f"\n   🎥 {media.director}" if media.director else ""
-            text += f"{idx}. *{title}{year}* {rating}\n{director}\n   👍 {item.votes_for} | 👎 {item.votes_against}\n\n"
+            text += f"{idx}. <b>{title}{year}</b> {rating}\n{director}\n   👍 {item.votes_for} | 👎 {item.votes_against}\n\n"
         else:
-            text += f"{idx}. *Неизвестное медиа* (id:{item.media_id})\n"
-    await message.answer(text, parse_mode="Markdown")
+            text += f"{idx}. <i>Неизвестное медиа</i> (id:{item.media_id})\n"
+    await message.answer(text, parse_mode="HTML")
 
 @router.message(Command("history"))
 async def cmd_history(message: Message, session: AsyncSession, queue_service: QueueService):
@@ -170,14 +170,17 @@ async def cmd_history(message: Message, session: AsyncSession, queue_service: Qu
     if not history:
         await message.answer("История пуста. Смотрите фильмы и они появятся здесь.")
         return
-    text = "📜 *Недавно просмотренные:*\n"
+    text = "📜 <b>Недавно просмотренные:</b>\n"
     for idx, item in enumerate(history, 1):
         media = await queue_service.get_media_for_item_by_id(item.media_id)
         if media:
-            text += f"{idx}. *{media.title}* — {item.accepted_at.strftime('%d.%m.%Y')}\n"
+            text += f"{idx}. <b>{media.title}</b> — {item.accepted_at.strftime('%d.%m.%Y')}"
+            if item.user_rating:
+                text += f" (оценка: {item.user_rating}/10)"
+            text += "\n"
         else:
-            text += f"{idx}. *Неизвестный фильм*\n"
-    await message.answer(text, parse_mode="Markdown")
+            text += f"{idx}. <i>Неизвестный фильм</i>\n"
+    await message.answer(text, parse_mode="HTML")
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
@@ -203,3 +206,19 @@ async def text_queue(message: Message, queue_service: QueueService):
 @router.message(F.text == "❓ Помощь")
 async def text_help(message: Message):
     await cmd_help(message)
+
+@router.message(Command("remind"))
+async def cmd_remind(message: Message):
+    """Установить напоминание: /remind 60 Проверить фильм"""
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.answer("Использование: /remind <секунды> <текст>\nПример: /remind 3600 Посмотреть фильм")
+        return
+    try:
+        delay = int(args[1])
+    except ValueError:
+        await message.answer("Ошибка: количество секунд должно быть числом.")
+        return
+    text = args[2]
+    await send_reminder_async(message.chat.id, text, delay)
+    await message.answer(f"✅ Напоминание установлено через {delay} секунд.")
