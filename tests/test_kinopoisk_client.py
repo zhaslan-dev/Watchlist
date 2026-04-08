@@ -10,7 +10,6 @@ def kinopoisk_client():
 @pytest.mark.asyncio
 async def test_search_movies_success(kinopoisk_client):
     mock_response = AsyncMock()
-    # ✅ .json() должен возвращать обычный словарь, не AsyncMock
     mock_response.json = MagicMock(return_value={
         "films": [
             {"filmId": 123, "nameRu": "Test", "rating": "7.5"}
@@ -35,8 +34,9 @@ async def test_search_movies_empty(kinopoisk_client):
 
 @pytest.mark.asyncio
 async def test_get_movie_by_id_success(kinopoisk_client):
-    mock_response = AsyncMock()
-    mock_response.json = MagicMock(return_value={
+    # Создаём отдельные моки для каждого вызова _request
+    mock_film_response = AsyncMock()
+    mock_film_response.json = MagicMock(return_value={
         "kinopoiskId": 123,
         "nameRu": "Test Movie",
         "ratingKinopoisk": 8.0,
@@ -44,7 +44,7 @@ async def test_get_movie_by_id_success(kinopoisk_client):
         "type": "FILM",
         "description": "Test description"
     })
-    mock_response.raise_for_status = AsyncMock()
+    mock_film_response.raise_for_status = AsyncMock()
 
     mock_staff_response = AsyncMock()
     mock_staff_response.json = MagicMock(return_value=[
@@ -52,7 +52,15 @@ async def test_get_movie_by_id_success(kinopoisk_client):
     ])
     mock_staff_response.raise_for_status = AsyncMock()
 
-    with patch.object(kinopoisk_client, "_request", side_effect=[mock_response, mock_staff_response]):
+    # Используем side_effect с асинхронными функциями, а не со значениями
+    async def request_side_effect(method, url, **kwargs):
+        if "/v2.2/films/123" in url:
+            return mock_film_response
+        elif "/v1/staff" in url:
+            return mock_staff_response
+        raise Exception("Unexpected call")
+
+    with patch.object(kinopoisk_client, "_request", side_effect=request_side_effect):
         movie = await kinopoisk_client.get_movie_by_id(123)
         assert movie is not None
         assert movie.kinopoiskId == 123
