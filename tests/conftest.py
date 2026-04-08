@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from Watchlist.infrastructure.db.models import Base
 from Watchlist.application.services.queue_service import QueueService
 from unittest.mock import AsyncMock
+import asyncio
 
 @pytest.fixture(scope="function")
 async def test_session() -> AsyncGenerator[AsyncSession, None]:
@@ -36,3 +37,9 @@ def queue_service(queue_service_mocks):
     return QueueService(
         media_repo, queue_repo, queue_item_repo, vote_repo, history_repo, kinopoisk, bot
     )
+
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
