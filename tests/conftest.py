@@ -7,15 +7,16 @@ from Watchlist.config import settings
 
 @pytest.fixture(scope="session")
 def event_loop():
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    """Создаёт event loop для асинхронных тестов."""
+    loop = asyncio.new_event_loop()
     yield loop
     loop.close()
 
 @pytest.fixture(scope="session")
 async def test_engine():
-    engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    """Создаёт тестовый движок SQLite in-memory."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
@@ -24,6 +25,7 @@ async def test_engine():
 
 @pytest.fixture
 async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
+    """Создаёт асинхронную сессию для каждого теста."""
     async_session = async_sessionmaker(test_engine, expire_on_commit=False)
     async with async_session() as session:
         yield session
