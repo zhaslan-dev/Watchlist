@@ -19,7 +19,6 @@ from Watchlist.config import settings
 from Watchlist.domain.entities import VoteType
 from Watchlist.infrastructure.metrics import REQUEST_COUNT, SEARCH_DURATION
 from Watchlist.infrastructure.db.repositories import WatchedHistoryRepository
-from Watchlist.tasks import send_reminder_async
 
 router = Router()
 
@@ -112,7 +111,6 @@ async def select_movie(callback: CallbackQuery, state: FSMContext, queue_service
         )
         media = await queue_service.get_media_for_item(queue_item)
         if media and media.poster_url:
-            # Используем HTML вместо Markdown – безопасно и не требует экранирования
             caption = f"🎬 <b>{media.title}</b>"
             if media.year:
                 caption += f" ({media.year})"
@@ -207,9 +205,15 @@ async def text_queue(message: Message, queue_service: QueueService):
 async def text_help(message: Message):
     await cmd_help(message)
 
+# ========== КОМАНДА /remind (опциональный Celery) ==========
 @router.message(Command("remind"))
 async def cmd_remind(message: Message):
-    """Установить напоминание: /remind 60 Проверить фильм"""
+    try:
+        from Watchlist.tasks import send_reminder_async
+    except ImportError:
+        await message.answer("❌ Модуль напоминаний не установлен. Установите Celery для использования этой функции.")
+        return
+
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
         await message.answer("Использование: /remind <секунды> <текст>\nПример: /remind 3600 Посмотреть фильм")

@@ -1,66 +1,101 @@
-# Watchlist/tasks.py
 """
-Определение Celery-задач для фонового выполнения.
+Определение Celery-задач для фонового выполнения (опционально).
 """
 
 import asyncio
-from celery import shared_task
-from aiogram import Bot
+import time
 from loguru import logger
-from Watchlist.config import settings
 
+# Попытка импортировать Celery, если он установлен
+try:
+    from celery import shared_task
+    CELERY_AVAILABLE = True
+except ImportError:
+    CELERY_AVAILABLE = False
+    # Создаём заглушку декоратора shared_task, чтобы не падал импорт
+    def shared_task(*args, **kwargs):
+        def decorator(func):
+            return func
+        # Если декоратор использован без аргументов (с функцией)
+        if args and callable(args[0]):
+            return decorator(args[0])
+        return decorator
+
+# Глобальный объект бота (будет инициализирован позже)
 _bot = None
 
-def get_bot():
+def set_bot(bot):
     global _bot
-    if _bot is None:
-        _bot = Bot(token=settings.BOT_TOKEN)
+    _bot = bot
+
+def get_bot():
     return _bot
 
-@shared_task(name="send_reminder")
-def send_reminder(chat_id: int, text: str, delay_seconds: int = 0):
-    import time
-    if delay_seconds > 0:
-        time.sleep(delay_seconds)
+# ------------------ Задачи ------------------
+if CELERY_AVAILABLE:
+    @shared_task(name="send_reminder")
+    def send_reminder(chat_id: int, text: str, delay_seconds: int = 0):
+        """Отправляет напоминание через заданное количество секунд."""
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
 
-    bot = get_bot()
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot.send_message(chat_id=chat_id, text=text))
-        loop.close()
-    except Exception as e:
-        logger.error(f"Failed to send reminder: {e}")
-    return f"Reminder sent to {chat_id}"
+        # Для отправки сообщения используем синхронную обёртку
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            # Импортируем Bot только здесь, чтобы избежать циклических импортов
+            from aiogram import Bot
+            from Watchlist.config import settings
+            if _bot:
+                bot = _bot
+            else:
+                bot = Bot(token=settings.BOT_TOKEN)
+            loop.run_until_complete(bot.send_message(chat_id=chat_id, text=text))
+            loop.close()
+        except Exception as e:
+            logger.error(f"Failed to send reminder: {e}")
+        return f"Reminder sent to {chat_id}"
 
-@shared_task(name="cleanup_old_votes")
-def cleanup_old_votes(days: int = 7):
-    from Watchlist.infrastructure.db.session import async_session_maker
-    from Watchlist.infrastructure.db.repositories import VoteRepository
-    import asyncio
-    from loguru import logger
+    @shared_task(name="cleanup_old_votes")
+    def cleanup_old_votes(days: int = 7):
+        """Очистка старых голосов (заглушка)."""
+        from Watchlist.infrastructure.db.session import async_session_maker
+        from Watchlist.infrastructure.db.repositories import VoteRepository
+        import asyncio
 
-    async def _cleanup():
-        async with async_session_maker() as session:
-            repo = VoteRepository(session)
-            # Пример: удаляем голоса, созданные раньше, чем days дней назад
-            # from datetime import datetime, timedelta
-            # threshold = datetime.now() - timedelta(days=days)
-            # result = await repo.delete_older_than(threshold)
-            logger.info(f"Cleaning up votes older than {days} days")
-            # await session.commit()
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_cleanup())
-        loop.close()
-    except Exception as e:
-        logger.error(f"Cleanup failed: {e}")
-        return "Failed"
-    return "Done"
+        async def _cleanup():
+            async with async_session_maker() as session:
+                repo = VoteRepository(session)
+                logger.info(f"Cleaning up votes older than {days} days")
+                await session.commit()
 
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_cleanup())
+            loop.close()
+        except Exception as e:
+            logger.error(f"Cleanup failed: {e}")
+            return "Failed"
+        return "Done"
+
+else:
+    # Заглушки, если Celery не установлен
+    def send_reminder(chat_id: int, text: str, delay_seconds: int = 0):
+        logger.warning("Celery not installed, reminder not sent")
+        return "Celery not installed"
+
+    def cleanup_old_votes(days: int = 7):
+        logger.warning("Celery not installed, cleanup skipped")
+        return "Celery not installed"
+
+# Асинхронные обёртки для вызова из бота
 async def send_reminder_async(chat_id: int, text: str, delay_seconds: int = 0):
-    send_reminder.apply_async(args=[chat_id, text, delay_seconds])
-
-async def cleanup_old_votes_async(days: int = 7):
-    cleanup_old_votes.apply_async(args=[days])
+    """Отправляет задачу в Celery (если доступен), иначе лог."""
+    if CELERY_AVAILABLE:
+        send_reminder.apply_async(args=[chat_id, text, delay_seconds])
+        logger.debug(f"Reminder scheduled for {chat_id} after {delay_seconds}s")
+    else:
+        logger.warning("Celery not installed, reminder not scheduled")
+        # Можно отправить напоминание немедленно, но в фоне? Не будем усложнять.
+        # Просто выведем предупреждение.

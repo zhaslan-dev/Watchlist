@@ -18,7 +18,7 @@ class KinopoiskMovie(BaseModel):
     rating: Optional[float] = None
     year: Optional[str] = None
     type: Optional[str] = None
-    director: Optional[str] = None  # ✅ NEW
+    director: Optional[str] = None
 
     @staticmethod
     def parse_rating(v: Any) -> Optional[float]:
@@ -74,7 +74,6 @@ class KinopoiskClient:
             movies_data = data.get("films", [])
             movies = []
             for m in movies_data:
-                # Преобразуем filmId в kinopoiskId
                 m['kinopoiskId'] = m.pop('filmId')
                 rating = m.get('rating')
                 if rating is not None and isinstance(rating, str) and rating.lower() == 'null':
@@ -90,7 +89,7 @@ class KinopoiskClient:
             raise KinopoiskError("Search failed") from e
 
     async def get_movie_by_id(self, kinopoisk_id: int) -> Optional[KinopoiskMovie]:
-        cache_key = f"movie:{kinopoisk_id}"  # <-- ОБЯЗАТЕЛЬНО ОПРЕДЕЛИТЬ ЗДЕСЬ
+        cache_key = f"movie:{kinopoisk_id}"
         if redis_client:
             cached = await redis_client.get(cache_key)
             if cached:
@@ -100,34 +99,22 @@ class KinopoiskClient:
                 else:
                     return KinopoiskMovie.model_validate(cached)
 
-        response = await self._request("GET", f"/v2.2/films/{kinopoisk_id}")
-        data = response.json()
-
-        # ✅ получаем режиссера
-        staff_resp = await self._request("GET", f"/v1/staff", params={"filmId": kinopoisk_id})
-        staff_data = staff_resp.json()
-
-        director = None
-        for person in staff_data:
-            if person.get("professionKey") == "DIRECTOR":
-                director = person.get("nameRu") or person.get("nameEn")
-                break
-
-        movie = KinopoiskMovie(
-            kinopoiskId=data.get("kinopoiskId"),
-            nameRu=data.get("nameRu"),
-            nameEn=data.get("nameEn"),
-            description=data.get("description"),
-            posterUrl=data.get("posterUrl"),
-            rating=data.get("ratingKinopoisk"),
-            year=str(data.get("year")) if data.get("year") else None,
-            type=data.get("type"),
-            director=director,  # ✅ NEW
-        )
-
         try:
             response = await self._request("GET", f"/v2.2/films/{kinopoisk_id}")
             data = response.json()
+
+            # Запрос режиссёра
+            director = None
+            try:
+                staff_resp = await self._request("GET", "/v1/staff", params={"filmId": kinopoisk_id})
+                staff_data = staff_resp.json()
+                for person in staff_data:
+                    if person.get("professionKey") == "DIRECTOR":
+                        director = person.get("nameRu") or person.get("nameEn")
+                        break
+            except Exception:
+                pass  # режиссёр не критичен
+
             movie = KinopoiskMovie(
                 kinopoiskId=data.get("kinopoiskId"),
                 nameRu=data.get("nameRu"),
@@ -136,7 +123,8 @@ class KinopoiskClient:
                 posterUrl=data.get("posterUrl"),
                 rating=data.get("ratingKinopoisk"),
                 year=str(data.get("year")) if data.get("year") else None,
-                type=data.get("type")
+                type=data.get("type"),
+                director=director,
             )
             if redis_client:
                 await redis_client.setex(cache_key, 86400, movie.model_dump_json())
@@ -152,7 +140,6 @@ class KinopoiskClient:
 
     async def convert_to_media_item(self, movie: KinopoiskMovie) -> MediaItem:
         title = movie.nameRu or movie.nameEn or "Без названия"
-
         return MediaItem(
             external_id=str(movie.kinopoiskId),
             title=title,
@@ -160,8 +147,8 @@ class KinopoiskClient:
             poster_url=movie.posterUrl,
             rating=movie.rating,
             source=MediaSource.KINOPOISK,
-            year=movie.year,  # ✅
-            director=movie.director,  # ✅
+            year=movie.year,
+            director=movie.director,
         )
 
     async def close(self):
